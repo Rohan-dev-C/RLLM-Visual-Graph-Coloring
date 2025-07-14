@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Dict, Union
 
 # ─── READ YOUR API KEYS FROM THE ENVIRONMENT ────────────────────────────────────
-OPENAI_API_KEY    = "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"
+OPENAI_API_KEY    = ""
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-GOOGLE_API_KEY    = "AIzaSyBqIvR2AqhYVSSI0tO6XCC6hMRq4UIB2iU"
+GOOGLE_API_KEY    = ""
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 # ────────────────────────────────────────────────────────────────────────────────
 SYSTEM_INSTR = (

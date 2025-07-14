@@ -1,0 +1,49 @@
+[
+  {
+    "graph_img": "graph_000.png",
+    "colouring": "uncolorable"
+  },
+  {
+    "graph_img": "graph_001.png",
+    "colouring": {
+      "1": "red",
+      "3": "red",
+      "5": "blue",
+      "6": "blue",
+      "7": "green",
+      "4": "yellow",
+      "8": "green",
+      "2": "blue"
+    }
+  },
+  {
+    "graph_img": "graph_002.png",
+    "colouring": {
+      "7": "red",
+      "5": "blue",
+      "6": "red",
+      "2": "green",
+      "3": "green",
+      "4": "blue",
+      "1": "blue",
+      "8": "green"
+    }
+  },
+  {
+    "graph_img": "graph_003.png",
+    "colouring": {
+      "3": "red",
+      "4": "blue",
+      "2": "blue",
+      "7": "green",
+      "1": "green",
+      "5": "yellow",
+      "6": "yellow",
+      "8": "green"
+    }
+  },
+  {
+    "graph_img": "graph_004.png",
+    "colouring": "uncolorable"
+  }
+]
