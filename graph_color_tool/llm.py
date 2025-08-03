@@ -1,33 +1,32 @@
 """
 llm.py
-Unified multimodal colouring interface for:
- • openai    (Vision‐chat via inline base64 blocks)
- • claude     (Anthropic; text‐only)
- • gemini     (Google; HTTP‐fetched image‐URL)
- • deepseek   (text‐only)
- • llama      (local HF; text‐only embed)
+Unified colouring interface that sends *images only* to vision-capable models.
+ • openai   – Responses API with image parts (inline base64)
+ • gemini   – Google Gen AI SDK: image-only (bytes part)
+ • claude   – text-only (fallback)
+ • deepseek – text-only (fallback)
+ • llama    – local HF text-only (fallback)
 """
-
 from __future__ import annotations
 import os
 import base64
 from pathlib import Path
 from typing import Dict, Union
 
-# ─── READ YOUR API KEYS FROM THE ENVIRONMENT ────────────────────────────────────
-OPENAI_API_KEY    = ""
+# API keys from environment
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-GOOGLE_API_KEY    = ""
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
-# ────────────────────────────────────────────────────────────────────────────────
+
+# Kept for non-vision fallbacks only (OpenAI/Gemini use image-only prompts)
 SYSTEM_INSTR = (
-    "You are an expert graph‐reasoning assistant. "
+    "You are an expert graph-reasoning assistant. "
     "Colour each vertex so no two adjacent vertices share a colour, "
     "using only Red, Blue, Green, or Yellow. "
     "Return exactly one line per vertex in the form:\n"
     "Vertex <k>: <Colour>\n"
     "If it cannot be 4-coloured, reply exactly with: UNCOLORABLE"
 )
+
 
 class LLMColourer:
     def __init__(self, provider: str, model: str | None = None, device: int = -1) -> None:
@@ -38,16 +37,17 @@ class LLMColourer:
         if self.provider == "openai":
             if not OPENAI_API_KEY:
                 raise RuntimeError("Missing OPENAI_API_KEY")
-            import openai
-            openai.api_key = OPENAI_API_KEY
-            self.client = openai
+            # Use the modern Responses API client per OpenAI docs.
+            # https://platform.openai.com/docs/api-reference/responses
+            from openai import OpenAI
+            self.client = OpenAI(api_key=OPENAI_API_KEY)
 
         elif self.provider == "gemini":
             if not GOOGLE_API_KEY:
                 raise RuntimeError("Missing GOOGLE_API_KEY")
-            # Official Google Gen AI SDK
+            # Google Gen AI SDK
             from google import genai
-            self.client = genai.Client(api_key=GOOGLE_API_KEY)
+            self.genai = genai.Client(api_key=GOOGLE_API_KEY)
 
         elif self.provider == "claude":
             if not ANTHROPIC_API_KEY:
@@ -64,25 +64,21 @@ class LLMColourer:
 
         elif self.provider == "llama":
             from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-            if not model:
+            if not self.model:
                 raise ValueError("Need --model for llama provider")
-            self.tokenizer = AutoTokenizer.from_pretrained(model)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model)
             self.model_obj = AutoModelForCausalLM.from_pretrained(
-                model,
-                device_map="auto" if device >= 0 else None,
-                torch_dtype="auto"
+                self.model, device_map="auto" if device >= 0 else None, torch_dtype="auto"
             )
-            self.client = pipeline(
-                "text-generation",
-                model=self.model_obj,
-                tokenizer=self.tokenizer,
-                device=device
-            )
+            self.client = pipeline("text-generation", model=self.model_obj, tokenizer=self.tokenizer, device=device)
+
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-    def _encode_image(self, image_path: Path) -> str:
-        """Base64‐encode a PNG file for inline embedding (OpenAI only)."""
+    # ─────────────── Helpers ───────────────
+
+    def _encode_image_b64(self, image_path: Path) -> str:
+        """Return a data URL suitable for the OpenAI image_url object."""
         data = base64.b64encode(image_path.read_bytes()).decode("ascii")
         return f"data:image/png;base64,{data}"
 
@@ -90,72 +86,70 @@ class LLMColourer:
         text = text.strip()
         if text.upper() == "UNCOLORABLE":
             raise ValueError("UNCOLORABLE")
-
         mapping: Dict[int, str] = {}
         for line in text.splitlines():
             if ":" not in line:
                 continue
-            idx, col = line.split(":", 1)
+            left, right = line.split(":", 1)
             try:
-                v = int(idx.strip().split()[-1])
-                mapping[v] = col.strip().lower()
+                k = int(left.strip().split()[-1])
+                mapping[k] = right.strip().lower()
             except ValueError:
                 continue
-
         if not mapping:
             raise ValueError("No valid vertices parsed")
         return mapping
 
+    # ─────────────── Main entrypoint ───────────────
+
     def prompt_for_colouring(
         self,
-        image_ref: Path,
+        image_path: Path,
         max_tokens: int = 256,
         temperature: float = 1.0
     ) -> Union[Dict[int, str], str]:
         """
-        Sends only the graph PNG to the chosen backend:
-         - OpenAI: inline base64
-         - Gemini:   embeds raw bytes via Part.from_bytes()
-         - Others:   text‐only
+        Prompt with *only the image* (instructions are drawn onto the PNG).
+        OpenAI: Responses API with an input_image part (no text).
+        Gemini: GenAI SDK with a bytes image part (no text).
+        Others: simple text fallback (kept for completeness).
         """
-        raw: str
-
-        # ─── OpenAI Vision ─────────────────────────────────────────────
+        # ── OpenAI (Responses API, image-only) ────────────────────────────────
+        # ── OpenAI (Responses API, image-only) ────────────────────────────────
         if self.provider == "openai":
-            b64 = self._encode_image(image_ref)
-            prompt = [
-                {"type": "text",      "text": SYSTEM_INSTR},
-                {"type": "image_url", "image_url": {"url": b64}}
-            ]
-            resp = self.client.chat.completions.create(
+            # Build a data URL string and pass it directly as a string (not an object)
+            b64_url = self._encode_image_b64(image_path)
+            resp = self.client.responses.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": b64_url  # <-- string, not {"url": ...}
+                            }
+                        ],
+                    }
+                ],
+                max_output_tokens=max_tokens,
+                temperature=temperature,
             )
-            raw = resp.choices[0].message.content
 
-        # ─── Google Gemini (Gen AI SDK) ─────────────────────────────────
+            # Try the convenient accessor first; fall back to walking the parts
+            raw = getattr(resp, "output_text", "") or ""
+            if not raw and getattr(resp, "output", None):
+                for part in resp.output[0].content:
+                    if getattr(part, "type", "") == "output_text":
+                        raw += part.text
+
+
+        # ── Google Gemini (Gen AI SDK; image-only bytes) ──────────────────────
         elif self.provider == "gemini":
             from google.genai import types
-
-            # 1. Read the PNG bytes
-            img_bytes = image_ref.read_bytes()
-
-            # 2. Build a true multimodal prompt
-            contents = [
-                types.Part.from_text(text=SYSTEM_INSTR),
-                types.Part.from_text(
-                    text="Please colour the graph in the provided image. "
-                         "Return one line per vertex, 'Vertex k: <Colour>'."
-                ),
-                types.Part.from_bytes(
-                    content=img_bytes,
-                    mime_type="image/png"
-                )
-            ]
-
-            # 3. Call the Gemini model
-            resp = self.client.models.generate_content(
+            img_bytes = image_path.read_bytes()
+            contents = [types.Part.from_bytes(content=img_bytes, mime_type="image/png")]
+            resp = self.genai.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -163,50 +157,37 @@ class LLMColourer:
                     max_output_tokens=max_tokens
                 )
             )
-            raw = resp.text
+            raw = resp.text or ""
 
-        # ─── Claude (Anthropic) ────────────────────────────────────────
+        # ── Claude / DeepSeek / LLaMA: text-only fallback ─────────────────────
         elif self.provider == "claude":
-            prompt = SYSTEM_INSTR + "\n\n(Graph image provided separately)"
+            prompt = SYSTEM_INSTR + "\n\n(Graph image instructions are embedded on the image.)"
             resp = self.client.completions.create(
-                model=self.model,
-                prompt=prompt,
-                max_tokens_to_sample=max_tokens,
-                temperature=temperature
+                model=self.model, prompt=prompt, max_tokens_to_sample=max_tokens, temperature=temperature
             )
             raw = resp["completion"]
 
-        # ─── DeepSeek (text‐only) ───────────────────────────────────────
         elif self.provider == "deepseek":
-            prompt = SYSTEM_INSTR + "\n\n(Graph image provided separately)"
+            prompt = SYSTEM_INSTR + "\n\n(Graph image instructions are embedded on the image.)"
             resp = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system",  "content": SYSTEM_INSTR},
-                    {"role": "user",    "content": prompt}
-                ],
+                messages=[{"role": "user", "content": prompt}],
                 temperature=temperature
             )
             raw = resp.choices[0].message.content
 
-        # ─── LLaMA (local HF; text‐only) ───────────────────────────────
         else:  # llama
-            prompt = SYSTEM_INSTR + "\n\n(Graph image provided separately)"
-            out = self.client(
-                prompt,
-                max_new_tokens=max_tokens,
-                do_sample=False,
-                temperature=temperature
-            )
+            prompt = SYSTEM_INSTR + "\n\n(Graph image instructions are embedded on the image.)"
+            out = self.client(prompt, max_new_tokens=max_tokens, do_sample=False, temperature=temperature)
             raw = out[0]["generated_text"]
             if raw.startswith(prompt):
                 raw = raw[len(prompt):].strip()
 
-        # ─── Short‐circuit “uncolorable” ───────────────────────────────
+        # Short-circuit if the model declares UNCOLORABLE
         if "uncolorable" in raw.lower():
             return "uncolorable"
 
-        # ─── Parse & return colouring dict ─────────────────────────────
+        # Parse the colouring
         try:
             return self._parse_response(raw)
         except ValueError:
