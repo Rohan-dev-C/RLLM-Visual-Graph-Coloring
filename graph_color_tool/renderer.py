@@ -70,7 +70,7 @@ def draw_graph(
         # concise, LLM-friendly instructions; they are on the image
         instructions = (
             f"Color this graph using only: Red, Blue, Green, Yellow.\n"
-            f"Label exactly {n} vertices as: 'Vertex k: <Colour>' for k=1..{n}.\n"
+            f"Label exactly {n} vertices as: 'Vertex k: <Color>' for k=1..{n}.\n"
             f"If it cannot be 4-colored, write exactly: UNCOLORABLE"
         )
 

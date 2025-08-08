@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Dict, Union
 
 # API keys from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY")
 
@@ -23,7 +25,16 @@ SYSTEM_INSTR = (
     "Colour each vertex so no two adjacent vertices share a colour, "
     "using only Red, Blue, Green, or Yellow. "
     "Return exactly one line per vertex in the form:\n"
-    "Vertex <k>: <Colour>\n"
+    "Vertex k: Colour \n"
+    "Here is an example of a valid output format: {1: 'red', 2: 'blue', 3: 'green', 4: 'blue', 5: 'green', 6: 'yellow', 7: 'red', 8: 'blue'}\n"
+    "You can use the format directly, no need to convert to a string, and no need to escape the curly braces."
+    "No need to write 'red' or 'blue' or 'green' or 'yellow', just write the colour name."
+    "If you try to write the colour name in quotes, you will be penalised."
+    "Use the format to directly return the colouring, do not write any other text."
+    "Do not explain, just return the colouring."
+    "Your response will be parsed using the JSON.loads function, so ensure the format is correct."
+    "Use a raw string literal for the format, do not use any escapes."
+    "If you fail to return the correct format, you will be penalised."
     "If it cannot be 4-coloured, reply exactly with: UNCOLORABLE"
 )
 
@@ -41,6 +52,9 @@ class LLMColourer:
             # https://platform.openai.com/docs/api-reference/responses
             from openai import OpenAI
             self.client = OpenAI(api_key=OPENAI_API_KEY)
+            # Ensure model name is ASCII-safe
+            if self.model:
+                self.model = self._clean_text(self.model)
 
         elif self.provider == "gemini":
             if not GOOGLE_API_KEY:
@@ -58,9 +72,12 @@ class LLMColourer:
         elif self.provider == "deepseek":
             if not DEEPSEEK_API_KEY:
                 raise RuntimeError("Missing DEEPSEEK_API_KEY")
-            import deepseek
-            deepseek.api_key = DEEPSEEK_API_KEY
-            self.client = deepseek
+            # Use OpenAI-compatible client for DeepSeek API
+            from openai import OpenAI
+            self.client = OpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url="https://api.deepseek.com/v1"
+            )
 
         elif self.provider == "llama":
             from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
@@ -81,6 +98,16 @@ class LLMColourer:
         """Return a data URL suitable for the OpenAI image_url object."""
         data = base64.b64encode(image_path.read_bytes()).decode("ascii")
         return f"data:image/png;base64,{data}"
+
+    def _clean_text(self, text: str) -> str:
+        """Clean text to ensure it's ASCII-safe for API calls."""
+        # Replace smart quotes with regular quotes
+        text = text.replace('"', '"').replace('"', '"')
+        text = text.replace(''', "'").replace(''', "'")
+        # Replace em dashes and en dashes
+        text = text.replace('—', '-').replace('–', '-')
+        # Ensure it's ASCII-safe
+        return text.encode('ascii', 'ignore').decode('ascii')
 
     def _parse_response(self, text: str) -> Dict[int, str]:
         text = text.strip()
@@ -116,6 +143,7 @@ class LLMColourer:
         """
         # ── OpenAI (Responses API, image-only) ────────────────────────────────
         # ── OpenAI (Responses API, image-only) ────────────────────────────────
+        # ── OpenAI (Responses API, image-only) ────────────────────────────────
         if self.provider == "openai":
             # Build a data URL string and pass it directly as a string (not an object)
             b64_url = self._encode_image_b64(image_path)
@@ -128,7 +156,11 @@ class LLMColourer:
                             {
                                 "type": "input_image",
                                 "image_url": b64_url  # <-- string, not {"url": ...}
-                            }
+                            }#,
+                            # {
+                            #     "type": "input_text",
+                            #     "text": SYSTEM_INSTR
+                            # }
                         ],
                     }
                 ],
