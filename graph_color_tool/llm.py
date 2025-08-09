@@ -156,11 +156,11 @@ class LLMColourer:
                             {
                                 "type": "input_image",
                                 "image_url": b64_url  # <-- string, not {"url": ...}
-                            }#,
-                            # {
-                            #     "type": "input_text",
-                            #     "text": SYSTEM_INSTR
-                            # }
+                            },
+                            {
+                                "type": "input_text",
+                                "text": SYSTEM_INSTR
+                            }
                         ],
                     }
                 ],
@@ -215,12 +215,5 @@ class LLMColourer:
             if raw.startswith(prompt):
                 raw = raw[len(prompt):].strip()
 
-        # Short-circuit if the model declares UNCOLORABLE
-        if "uncolorable" in raw.lower():
-            return "uncolorable"
 
-        # Parse the colouring
-        try:
-            return self._parse_response(raw)
-        except ValueError:
-            return "uncolorable"
+        return raw
